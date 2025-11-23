@@ -49,6 +49,19 @@ QuestTracker_ZoneData.ZoneNameToID = {
     ["Thousand Needles"] = 400,
     ["Un'Goro Crater"] = 490,
     ["Winterspring"] = 618,
+
+    -- TurtleWoW Custom Zones
+    ["Hyjal"] = 616,
+    ["Gilneas"] = 5179,
+    ["Thalassian Highlands"] = 5225,
+    ["Northwind"] = 5581,
+    ["Tel'Abim"] = 5121,
+    ["Lapidis Isle"] = 409,
+    ["Balor"] = 5561,
+    ["Grim Reaches"] = 5602,
+    ["Blackstone Island"] = 5536,
+    ["Icepoint Rock"] = 5024,
+    ["The Rock of Desolation"] = 5557,
 }
 
 -- Sub-zones that belong to each main zone (for quest location tracking)
@@ -240,4 +253,17 @@ QuestTracker_ZoneData.ZoneLevels = {
     ["Winterspring"] = {53, 60},
     ["Silithus"] = {55, 60},
     ["Moonglade"] = {55, 60},
+
+    -- TurtleWoW Custom Zones
+    ["Hyjal"] = {55, 60},
+    ["Gilneas"] = {1, 20},
+    ["Thalassian Highlands"] = {20, 40},
+    ["Northwind"] = {40, 55},
+    ["Tel'Abim"] = {35, 50},
+    ["Lapidis Isle"] = {45, 55},
+    ["Balor"] = {50, 60},
+    ["Grim Reaches"] = {55, 60},
+    ["Blackstone Island"] = {50, 60},
+    ["Icepoint Rock"] = {55, 60},
+    ["The Rock of Desolation"] = {55, 60},
 }
