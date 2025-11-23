@@ -50,6 +50,17 @@ QuestTracker_ZoneData.ZoneNameToID = {
     ["Un'Goro Crater"] = 490,
     ["Winterspring"] = 618,
 
+    -- Capital Cities
+    ["Stormwind City"] = 1519,
+    ["Ironforge"] = 1537,
+    ["Darnassus"] = 1657,
+    ["Orgrimmar"] = 1637,
+    ["Thunder Bluff"] = 1638,
+    ["Undercity"] = 1497,
+
+    -- TurtleWoW Custom Cities
+    ["Alah'Thalas"] = 2040,
+
     -- TurtleWoW Custom Zones
     ["Hyjal"] = 616,
     ["Gilneas"] = 5179,
@@ -253,6 +264,17 @@ QuestTracker_ZoneData.ZoneLevels = {
     ["Winterspring"] = {53, 60},
     ["Silithus"] = {55, 60},
     ["Moonglade"] = {55, 60},
+
+    -- Capital Cities
+    ["Stormwind City"] = {1, 60},
+    ["Ironforge"] = {1, 60},
+    ["Darnassus"] = {1, 60},
+    ["Orgrimmar"] = {1, 60},
+    ["Thunder Bluff"] = {1, 60},
+    ["Undercity"] = {1, 60},
+
+    -- TurtleWoW Custom Cities
+    ["Alah'Thalas"] = {1, 60},
 
     -- TurtleWoW Custom Zones
     ["Hyjal"] = {55, 60},
