@@ -382,6 +382,11 @@ local questHeaders = {}
 local zoneSortMode = "name" -- "name", "progress", "percent"
 local zoneSortAsc = true
 local questTypeFilter = "all" -- "all", "kill", "gather", "interact", "other"
+local currentView = "zones" -- "zones" or "stats"
+
+-- Quest list filters (for zones view)
+local questLevelFilter = "all" -- "all", "1-10", "11-20", etc.
+local questStatusFilter = "all" -- "all", "available", "locked", "completed"
 
 local function CreateTrackerWindow()
     if trackerWindow then return trackerWindow end
@@ -420,16 +425,83 @@ local function CreateTrackerWindow()
     trackerWindow.closeBtn:SetPoint("TOPRIGHT", -5, -5)
     trackerWindow.closeBtn:SetScript("OnClick", function() trackerWindow:Hide() end)
 
+    -- View tabs
+    local function CreateTabButton(name, label, xOffset)
+        local btn = CreateFrame("Button", "QuestTrackerTab"..name, trackerWindow)
+        btn:SetWidth(70)
+        btn:SetHeight(22)
+        btn:SetPoint("TOPLEFT", 15 + xOffset, -8)
+
+        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        btn.text:SetPoint("CENTER", 0, 0)
+        btn.text:SetText(label)
+
+        btn.bg = btn:CreateTexture(nil, "BACKGROUND")
+        btn.bg:SetAllPoints()
+        btn.bg:SetTexture(0.2, 0.2, 0.2, 0.8)
+
+        btn.viewName = string.lower(name)
+        btn:SetScript("OnClick", function()
+            currentView = this.viewName
+            QuestTracker:UpdateViewTabs()
+            QuestTracker:RefreshCurrentView()
+        end)
+
+        return btn
+    end
+
+    trackerWindow.tabZones = CreateTabButton("Zones", "Zones", 0)
+    trackerWindow.tabStats = CreateTabButton("Stats", "Statistics", 75)
+
+    -- ============ STATS PANEL (Statistics View) ============
+    trackerWindow.statsPanel = CreateFrame("Frame", nil, trackerWindow)
+    trackerWindow.statsPanel:SetPoint("TOPLEFT", 10, -35)
+    trackerWindow.statsPanel:SetPoint("BOTTOMRIGHT", -10, 15)
+    trackerWindow.statsPanel:SetFrameLevel(trackerWindow:GetFrameLevel() + 5)
+    trackerWindow.statsPanel:Hide()
+
+    -- Stats scroll frame
+    trackerWindow.statsScroll = CreateFrame("ScrollFrame", "QuestTrackerStatsScroll", trackerWindow.statsPanel, "UIPanelScrollFrameTemplate")
+    trackerWindow.statsScroll:SetPoint("TOPLEFT", 0, 0)
+    trackerWindow.statsScroll:SetPoint("BOTTOMRIGHT", -25, 0)
+
+    trackerWindow.statsContent = CreateFrame("Frame", "QuestTrackerStatsContent", trackerWindow.statsScroll)
+    trackerWindow.statsContent:SetWidth(750)
+    trackerWindow.statsContent:SetHeight(1)
+    trackerWindow.statsScroll:SetScrollChild(trackerWindow.statsContent)
+
+    -- Enable mouse wheel scrolling for stats panel
+    trackerWindow.statsScroll:EnableMouseWheel(true)
+    trackerWindow.statsScroll:SetScript("OnMouseWheel", function()
+        local scrollBar = getglobal("QuestTrackerStatsScrollScrollBar")
+        if scrollBar then
+            local current = scrollBar:GetValue()
+            local min, max = scrollBar:GetMinMaxValues()
+            local step = 40
+            if arg1 > 0 then
+                scrollBar:SetValue(math.max(current - step, min))
+            else
+                scrollBar:SetValue(math.min(current + step, max))
+            end
+        end
+    end)
+
+    -- Pool for stats lines
+    trackerWindow.statsLines = {}
+
+    -- Pool for card frames
+    trackerWindow.statsCards = {}
+
     -- Divider line (positioned to give ~340px to left panel)
     trackerWindow.divider = trackerWindow:CreateTexture(nil, "ARTWORK")
     trackerWindow.divider:SetTexture(1, 1, 1, 0.3)
     trackerWindow.divider:SetWidth(1)
-    trackerWindow.divider:SetPoint("TOP", trackerWindow, "TOP", -55, -40)
+    trackerWindow.divider:SetPoint("TOP", trackerWindow, "TOP", -55, -58)
     trackerWindow.divider:SetPoint("BOTTOM", trackerWindow, "BOTTOM", -55, 15)
 
     -- ============ LEFT PANEL (Zone List) ============
     trackerWindow.leftPanel = CreateFrame("Frame", nil, trackerWindow)
-    trackerWindow.leftPanel:SetPoint("TOPLEFT", 10, -40)
+    trackerWindow.leftPanel:SetPoint("TOPLEFT", 10, -58)
     trackerWindow.leftPanel:SetPoint("BOTTOMRIGHT", trackerWindow.divider, "BOTTOMLEFT", -10, 5)
 
     -- Column headers (clickable for sorting)
@@ -499,6 +571,7 @@ local function CreateTrackerWindow()
     trackerWindow.rightPanel = CreateFrame("Frame", nil, trackerWindow)
     trackerWindow.rightPanel:SetPoint("TOPLEFT", trackerWindow.divider, "TOPRIGHT", 10, 0)
     trackerWindow.rightPanel:SetPoint("BOTTOMRIGHT", -10, 15)
+    trackerWindow.rightPanel:SetFrameLevel(trackerWindow:GetFrameLevel() + 1)
 
     -- Right panel title (zone name)
     trackerWindow.rightTitle = trackerWindow:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -511,45 +584,149 @@ local function CreateTrackerWindow()
     trackerWindow.progressText:SetPoint("TOPLEFT", trackerWindow.rightTitle, "BOTTOMLEFT", 0, -5)
     trackerWindow.progressText:SetTextColor(0.7, 0.7, 0.7)
 
-    -- Quest type filter buttons
-    local function CreateFilterButton(name, label, xOffset)
-        local btn = CreateFrame("Button", "QuestTrackerFilter"..name, trackerWindow.rightPanel)
-        btn:SetWidth(55)
-        btn:SetHeight(18)
-        btn:SetPoint("TOPLEFT", trackerWindow.progressText, "BOTTOMLEFT", xOffset, -5)
-
-        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        btn.text:SetPoint("CENTER", 0, 0)
-        btn.text:SetText(label)
+    -- Filter dropdowns helper (positioned below tabs)
+    local function CreateFilterDropdown(name, xOffset, width, options, getValue, setValue, refreshFunc)
+        local btn = CreateFrame("Button", "QuestTrackerFilter"..name.."Dropdown", trackerWindow)
+        btn:SetWidth(width)
+        btn:SetHeight(16)
+        btn:SetPoint("TOPLEFT", trackerWindow, "TOPLEFT", 15 + xOffset, -35)
 
         btn.bg = btn:CreateTexture(nil, "BACKGROUND")
         btn.bg:SetAllPoints()
-        btn.bg:SetTexture(0.2, 0.2, 0.2, 0.8)
+        btn.bg:SetTexture(0.15, 0.15, 0.15, 0.9)
 
-        btn.highlight = btn:CreateTexture(nil, "HIGHLIGHT")
-        btn.highlight:SetAllPoints()
-        btn.highlight:SetTexture(1, 1, 1, 0.1)
+        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        btn.text:SetPoint("LEFT", 4, 0)
+        btn.text:SetPoint("RIGHT", -12, 0)
+        btn.text:SetJustifyH("LEFT")
 
-        btn.filterType = string.lower(name)
+        btn.arrow = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        btn.arrow:SetPoint("RIGHT", -2, 0)
+        btn.arrow:SetText("v")
+
+        local function UpdateText()
+            local val = getValue()
+            for _, opt in ipairs(options) do
+                if opt.value == val then
+                    btn.text:SetText(opt.label)
+                    return
+                end
+            end
+            btn.text:SetText("All")
+        end
+        btn.UpdateText = UpdateText
+        UpdateText()
+
+        btn.menu = CreateFrame("Frame", "QuestTrackerFilter"..name.."Menu", btn)
+        btn.menu:SetWidth(width)
+        btn.menu:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -1)
+        btn.menu:SetFrameStrata("TOOLTIP")
+        btn.menu:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true, tileSize = 16, edgeSize = 10,
+            insets = { left = 2, right = 2, top = 2, bottom = 2 }
+        })
+        btn.menu:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
+        btn.menu:SetBackdropBorderColor(0.5, 0.45, 0.35, 1)
+        btn.menu:Hide()
+
+        local menuHeight = 3
+        for i, opt in ipairs(options) do
+            local item = CreateFrame("Button", nil, btn.menu)
+            item:SetWidth(width - 6)
+            item:SetHeight(13)
+            item:SetPoint("TOPLEFT", 3, -(3 + (i-1) * 13))
+
+            item.text = item:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            item.text:SetPoint("LEFT", 2, 0)
+            item.text:SetText(opt.label)
+
+            item.highlight = item:CreateTexture(nil, "HIGHLIGHT")
+            item.highlight:SetAllPoints()
+            item.highlight:SetTexture(1, 1, 1, 0.1)
+
+            item.value = opt.value
+            item:SetScript("OnClick", function()
+                setValue(this.value)
+                UpdateText()
+                btn.menu:Hide()
+                refreshFunc()
+            end)
+            menuHeight = menuHeight + 13
+        end
+        btn.menu:SetHeight(menuHeight + 3)
+
         btn:SetScript("OnClick", function()
-            questTypeFilter = this.filterType
-            QuestTracker:UpdateFilterButtons()
-            if selectedZone then
-                QuestTracker:PopulateQuestList(selectedZone)
+            -- Hide all other filter menus
+            if trackerWindow.levelDropdown and trackerWindow.levelDropdown.menu then
+                trackerWindow.levelDropdown.menu:Hide()
+            end
+            if trackerWindow.statusDropdown and trackerWindow.statusDropdown.menu then
+                trackerWindow.statusDropdown.menu:Hide()
+            end
+            if trackerWindow.typeDropdown and trackerWindow.typeDropdown.menu then
+                trackerWindow.typeDropdown.menu:Hide()
+            end
+            if this.menu:IsVisible() then
+                this.menu:Hide()
+            else
+                this.menu:Show()
             end
         end)
 
         return btn
     end
 
-    trackerWindow.filterAll = CreateFilterButton("All", "All", 0)
-    trackerWindow.filterKill = CreateFilterButton("Kill", "Kill", 60)
-    trackerWindow.filterGather = CreateFilterButton("Gather", "Gather", 120)
-    trackerWindow.filterOther = CreateFilterButton("Other", "Other", 180)
+    local levelOptions = {
+        {label = "All Levels", value = "all"},
+        {label = "1-10", value = "1-10"},
+        {label = "11-20", value = "11-20"},
+        {label = "21-30", value = "21-30"},
+        {label = "31-40", value = "31-40"},
+        {label = "41-50", value = "41-50"},
+        {label = "51-60", value = "51-60"},
+    }
+
+    local statusOptions = {
+        {label = "All Status", value = "all"},
+        {label = "Available", value = "available"},
+        {label = "Locked", value = "locked"},
+        {label = "Completed", value = "completed"},
+    }
+
+    local typeOptions = {
+        {label = "All Types", value = "all"},
+        {label = "Kill", value = "kill"},
+        {label = "Gather", value = "gather"},
+        {label = "Other", value = "other"},
+    }
+
+    local function RefreshAllLists()
+        QuestTracker:PopulateZoneList()
+        if selectedZone then
+            QuestTracker:PopulateQuestList(selectedZone)
+        end
+    end
+
+    trackerWindow.levelDropdown = CreateFilterDropdown("Level", 0, 80, levelOptions,
+        function() return questLevelFilter end,
+        function(v) questLevelFilter = v end,
+        RefreshAllLists)
+
+    trackerWindow.statusDropdown = CreateFilterDropdown("Status", 85, 85, statusOptions,
+        function() return questStatusFilter end,
+        function(v) questStatusFilter = v end,
+        RefreshAllLists)
+
+    trackerWindow.typeDropdown = CreateFilterDropdown("Type", 175, 80, typeOptions,
+        function() return questTypeFilter end,
+        function(v) questTypeFilter = v end,
+        RefreshAllLists)
 
     -- Quest scroll frame
     trackerWindow.questScroll = CreateFrame("ScrollFrame", "QuestTrackerQuestScroll", trackerWindow.rightPanel, "UIPanelScrollFrameTemplate")
-    trackerWindow.questScroll:SetPoint("TOPLEFT", 0, -68)
+    trackerWindow.questScroll:SetPoint("TOPLEFT", 0, -45)
     trackerWindow.questScroll:SetPoint("BOTTOMRIGHT", -25, 0)
 
     trackerWindow.questContent = CreateFrame("Frame", "QuestTrackerQuestContent", trackerWindow.questScroll)
@@ -721,21 +898,10 @@ end
 -- Update filter button visual states
 function QuestTracker:UpdateFilterButtons()
     if not trackerWindow then return end
-    local buttons = {
-        trackerWindow.filterAll,
-        trackerWindow.filterKill,
-        trackerWindow.filterGather,
-        trackerWindow.filterOther
-    }
-    for _, btn in ipairs(buttons) do
-        if btn.filterType == questTypeFilter then
-            btn.bg:SetTexture(0.4, 0.3, 0.1, 0.9)
-            btn.text:SetTextColor(1, 0.82, 0)
-        else
-            btn.bg:SetTexture(0.2, 0.2, 0.2, 0.8)
-            btn.text:SetTextColor(0.8, 0.8, 0.8)
-        end
-    end
+    -- Update dropdown text for the new filter dropdowns
+    if trackerWindow.levelDropdown then trackerWindow.levelDropdown:UpdateText() end
+    if trackerWindow.statusDropdown then trackerWindow.statusDropdown:UpdateText() end
+    if trackerWindow.typeDropdown then trackerWindow.typeDropdown:UpdateText() end
 end
 
 -- Get quest type based on objectives
@@ -764,12 +930,46 @@ local function GetQuestType(questID)
     end
 end
 
--- Check if quest matches current filter
+-- Check if quest matches current filters (type, level, status)
 local function QuestMatchesFilter(questID)
-    if questTypeFilter == "all" then
-        return true
+    -- Check type filter
+    if questTypeFilter ~= "all" then
+        if GetQuestType(questID) ~= questTypeFilter then
+            return false
+        end
     end
-    return GetQuestType(questID) == questTypeFilter
+
+    -- Check level filter
+    if questLevelFilter ~= "all" then
+        local level = GetQuestLevel(questID)
+        local matches = false
+        if questLevelFilter == "1-10" then matches = level >= 1 and level <= 10
+        elseif questLevelFilter == "11-20" then matches = level >= 11 and level <= 20
+        elseif questLevelFilter == "21-30" then matches = level >= 21 and level <= 30
+        elseif questLevelFilter == "31-40" then matches = level >= 31 and level <= 40
+        elseif questLevelFilter == "41-50" then matches = level >= 41 and level <= 50
+        elseif questLevelFilter == "51-60" then matches = level >= 51 and level <= 60
+        end
+        if not matches then return false end
+    end
+
+    -- Check status filter
+    if questStatusFilter ~= "all" then
+        local done = pfQuest_history and pfQuest_history[questID]
+        if questStatusFilter == "completed" then
+            if not done then return false end
+        elseif questStatusFilter == "available" then
+            if done then return false end
+            local isAvail, _ = IsQuestAvailable(questID)
+            if not isAvail then return false end
+        elseif questStatusFilter == "locked" then
+            if done then return false end
+            local isAvail, _ = IsQuestAvailable(questID)
+            if isAvail then return false end
+        end
+    end
+
+    return true
 end
 
 -- Populate the quest list for a zone
@@ -954,6 +1154,80 @@ function QuestTracker:PopulateQuestList(zoneName)
     end
 end
 
+-- Get filtered zone progress (respects current filters)
+function QuestTracker:GetFilteredZoneProgress(zoneName)
+    local mainZoneID = GetZoneIDByName(zoneName)
+    if not mainZoneID then return 0, 0 end
+
+    local allZoneIDs = GetAllZoneIDs(mainZoneID)
+    local zoneQuests = {}
+
+    for _, zoneID in ipairs(allZoneIDs) do
+        if self.zoneQuestCache[zoneID] then
+            for questID, _ in pairs(self.zoneQuestCache[zoneID]) do
+                zoneQuests[questID] = true
+            end
+        end
+    end
+
+    local total = 0
+    local completed = 0
+
+    for questID, _ in pairs(zoneQuests) do
+        -- Apply all filters using the same logic as QuestMatchesFilter
+        local matchesFilter = true
+
+        -- Check type filter
+        if questTypeFilter ~= "all" then
+            if GetQuestType(questID) ~= questTypeFilter then
+                matchesFilter = false
+            end
+        end
+
+        -- Check level filter
+        if matchesFilter and questLevelFilter ~= "all" then
+            local level = GetQuestLevel(questID)
+            local matchesLevel = false
+            if questLevelFilter == "1-10" then matchesLevel = level >= 1 and level <= 10
+            elseif questLevelFilter == "11-20" then matchesLevel = level >= 11 and level <= 20
+            elseif questLevelFilter == "21-30" then matchesLevel = level >= 21 and level <= 30
+            elseif questLevelFilter == "31-40" then matchesLevel = level >= 31 and level <= 40
+            elseif questLevelFilter == "41-50" then matchesLevel = level >= 41 and level <= 50
+            elseif questLevelFilter == "51-60" then matchesLevel = level >= 51 and level <= 60
+            end
+            if not matchesLevel then matchesFilter = false end
+        end
+
+        -- Check status filter
+        if matchesFilter and questStatusFilter ~= "all" then
+            local done = pfQuest_history and pfQuest_history[questID]
+            if questStatusFilter == "completed" then
+                if not done then matchesFilter = false end
+            elseif questStatusFilter == "available" then
+                if done then matchesFilter = false
+                else
+                    local isAvail, _ = IsQuestAvailable(questID)
+                    if not isAvail then matchesFilter = false end
+                end
+            elseif questStatusFilter == "locked" then
+                if done then matchesFilter = false
+                else
+                    local isAvail, _ = IsQuestAvailable(questID)
+                    if isAvail then matchesFilter = false end
+                end
+            end
+        end
+
+        if matchesFilter then
+            total = total + 1
+            local done = pfQuest_history and pfQuest_history[questID]
+            if done then completed = completed + 1 end
+        end
+    end
+
+    return completed, total
+end
+
 -- Populate the zone list
 function QuestTracker:PopulateZoneList()
     -- Hide existing buttons
@@ -965,11 +1239,11 @@ function QuestTracker:PopulateZoneList()
         self:BuildQuestCache()
     end
 
-    -- Get all zones from ZoneData
+    -- Get all zones from ZoneData (using filtered progress)
     local zones = {}
     if QuestTracker_ZoneData and QuestTracker_ZoneData.ZoneNameToID then
         for zoneName, zoneID in pairs(QuestTracker_ZoneData.ZoneNameToID) do
-            local completed, total = self:GetZoneProgress(zoneName)
+            local completed, total = self:GetFilteredZoneProgress(zoneName)
             if total and total > 0 then
                 local percent = math.floor((completed / total) * 100)
                 table.insert(zones, {
@@ -991,6 +1265,19 @@ function QuestTracker:PopulateZoneList()
                 return a.name > b.name
             end
         elseif zoneSortMode == "percent" then
+            -- If percentages are equal, use total count as secondary sort
+            if a.percent == b.percent then
+                if a.total ~= b.total then
+                    -- Respect sort direction for secondary sort too
+                    if zoneSortAsc then
+                        return a.total < b.total
+                    else
+                        return a.total > b.total
+                    end
+                end
+                -- If totals also equal, sort by name
+                return a.name < b.name
+            end
             if zoneSortAsc then
                 return a.percent < b.percent
             else
@@ -1040,13 +1327,464 @@ function QuestTracker:PopulateZoneList()
     trackerWindow.zoneContent:SetHeight(math.max(yOffset, 1))
 end
 
+-- Update tab button visual states
+function QuestTracker:UpdateViewTabs()
+    if not trackerWindow then return end
+
+    -- Update zone tab
+    if currentView == "zones" then
+        trackerWindow.tabZones.bg:SetTexture(0.4, 0.3, 0.1, 0.9)
+        trackerWindow.tabZones.text:SetTextColor(1, 0.82, 0)
+    else
+        trackerWindow.tabZones.bg:SetTexture(0.2, 0.2, 0.2, 0.8)
+        trackerWindow.tabZones.text:SetTextColor(0.8, 0.8, 0.8)
+    end
+
+    -- Update stats tab
+    if currentView == "stats" then
+        trackerWindow.tabStats.bg:SetTexture(0.4, 0.3, 0.1, 0.9)
+        trackerWindow.tabStats.text:SetTextColor(1, 0.82, 0)
+    else
+        trackerWindow.tabStats.bg:SetTexture(0.2, 0.2, 0.2, 0.8)
+        trackerWindow.tabStats.text:SetTextColor(0.8, 0.8, 0.8)
+    end
+end
+
+-- Refresh the current view
+function QuestTracker:RefreshCurrentView()
+    if not trackerWindow then return end
+
+    if currentView == "zones" then
+        -- Show zone panels, hide stats
+        trackerWindow.leftPanel:Show()
+        trackerWindow.rightPanel:Show()
+        trackerWindow.divider:Show()
+        trackerWindow.rightTitle:Show()
+        trackerWindow.progressText:Show()
+        trackerWindow.levelDropdown:Show()
+        trackerWindow.statusDropdown:Show()
+        trackerWindow.typeDropdown:Show()
+        trackerWindow.statsPanel:Hide()
+        -- Update dropdown text
+        if trackerWindow.levelDropdown.UpdateText then trackerWindow.levelDropdown:UpdateText() end
+        if trackerWindow.statusDropdown.UpdateText then trackerWindow.statusDropdown:UpdateText() end
+        if trackerWindow.typeDropdown.UpdateText then trackerWindow.typeDropdown:UpdateText() end
+        self:PopulateZoneList()
+        if selectedZone then
+            self:PopulateQuestList(selectedZone)
+        end
+    else
+        -- Show stats, hide zone panels and filters
+        trackerWindow.leftPanel:Hide()
+        trackerWindow.rightPanel:Hide()
+        trackerWindow.divider:Hide()
+        trackerWindow.rightTitle:Hide()
+        trackerWindow.progressText:Hide()
+        trackerWindow.levelDropdown:Hide()
+        trackerWindow.statusDropdown:Hide()
+        trackerWindow.typeDropdown:Hide()
+        trackerWindow.statsPanel:Show()
+        self:PopulateStatsView()
+    end
+end
+
+-- Get or create a stats line
+local function GetStatsLine(frame, index)
+    if not frame.statsLines[index] then
+        local line = frame.statsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        line:SetWidth(730)
+        line:SetJustifyH("LEFT")
+        frame.statsLines[index] = line
+    end
+    return frame.statsLines[index]
+end
+
+-- Get or create a card frame (border only, no background fill)
+local function GetStatsCard(frame, index)
+    if not frame.statsCards[index] then
+        local card = CreateFrame("Frame", "QuestTrackerStatsCard"..index, frame.statsContent)
+        card:SetFrameLevel(frame.statsContent:GetFrameLevel() - 1)
+        card:SetBackdrop({
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true, tileSize = 16, edgeSize = 12,
+            insets = { left = 3, right = 3, top = 3, bottom = 3 }
+        })
+        card:SetBackdropBorderColor(0.5, 0.45, 0.3, 1)
+        frame.statsCards[index] = card
+    end
+    return frame.statsCards[index]
+end
+
+-- Populate the statistics view
+function QuestTracker:PopulateStatsView()
+    if not trackerWindow then return end
+
+    -- Hide all existing lines and cards
+    for _, line in pairs(trackerWindow.statsLines) do
+        line:Hide()
+    end
+    for _, card in pairs(trackerWindow.statsCards) do
+        card:Hide()
+    end
+
+    if not self.cacheBuilt then
+        self:BuildQuestCache()
+    end
+
+    local lineIndex = 0
+    local cardIndex = 0
+    local yOffset = 0
+    local colWidth = 240
+    local col2X = 250
+    local col3X = 500
+    local cardPadding = 8
+    local contentWidth = 740
+
+    -- Helper to create a card
+    local function CreateCard(x, y, width, height)
+        cardIndex = cardIndex + 1
+        local card = GetStatsCard(trackerWindow, cardIndex)
+        card:SetPoint("TOPLEFT", trackerWindow.statsContent, "TOPLEFT", x, -y)
+        card:SetWidth(width)
+        card:SetHeight(height)
+        card:Show()
+        return card
+    end
+
+    -- Helper to add a line at specific position
+    local function AddLineAt(text, x, y, r, g, b, width)
+        lineIndex = lineIndex + 1
+        local line = GetStatsLine(trackerWindow, lineIndex)
+        line:SetText(text)
+        line:SetTextColor(r or 0.9, g or 0.9, b or 0.9)
+        line:SetFontObject(GameFontHighlightSmall)
+        line:SetWidth(width or colWidth)
+        line:SetPoint("TOPLEFT", trackerWindow.statsContent, "TOPLEFT", x, -y)
+        line:Show()
+    end
+
+    -- Helper to add a section header inside a card
+    local function AddCardHeader(text, x, y)
+        lineIndex = lineIndex + 1
+        local line = GetStatsLine(trackerWindow, lineIndex)
+        line:SetText(text)
+        line:SetTextColor(1, 0.82, 0)
+        line:SetFontObject(GameFontNormal)
+        line:SetWidth(contentWidth - 20)
+        line:SetPoint("TOPLEFT", trackerWindow.statsContent, "TOPLEFT", x, -y)
+        line:Show()
+    end
+
+    -- Gather all statistics
+    local totalQuests = 0
+    local completedQuests = 0
+    local killQuests = 0
+    local gatherQuests = 0
+    local otherQuests = 0
+    local killCompleted = 0
+    local gatherCompleted = 0
+    local otherCompleted = 0
+
+    -- Per-continent stats
+    local continentStats = {
+        ["Eastern Kingdoms"] = {total = 0, completed = 0, zones = {}},
+        ["Kalimdor"] = {total = 0, completed = 0, zones = {}},
+        ["Cities"] = {total = 0, completed = 0, zones = {}},
+        ["TurtleWoW"] = {total = 0, completed = 0, zones = {}},
+    }
+
+    -- Zone continent mapping
+    local zoneToContinent = {}
+    local easternKingdoms = {
+        "Alterac Mountains", "Arathi Highlands", "Badlands", "Blasted Lands",
+        "Burning Steppes", "Deadwind Pass", "Dun Morogh", "Duskwood",
+        "Eastern Plaguelands", "Elwynn Forest", "Hillsbrad Foothills", "Loch Modan",
+        "Redridge Mountains", "Searing Gorge", "Silverpine Forest", "Stranglethorn Vale",
+        "Swamp of Sorrows", "The Hinterlands", "Tirisfal Glades", "Western Plaguelands",
+        "Westfall", "Wetlands"
+    }
+    local kalimdor = {
+        "Ashenvale", "Azshara", "Darkshore", "Desolace", "Durotar", "Dustwallow Marsh",
+        "Felwood", "Feralas", "Moonglade", "Mulgore", "Silithus", "Stonetalon Mountains",
+        "Tanaris", "Teldrassil", "The Barrens", "Thousand Needles", "Un'Goro Crater", "Winterspring"
+    }
+    local cities = {
+        "Stormwind City", "Ironforge", "Darnassus", "Orgrimmar", "Thunder Bluff", "Undercity", "Alah'Thalas"
+    }
+    local turtleZones = {
+        "Hyjal", "Gilneas", "Thalassian Highlands", "Northwind", "Tel'Abim",
+        "Lapidis Isle", "Balor", "Grim Reaches", "Blackstone Island", "Icepoint Rock", "The Rock of Desolation"
+    }
+
+    for _, z in ipairs(easternKingdoms) do zoneToContinent[z] = "Eastern Kingdoms" end
+    for _, z in ipairs(kalimdor) do zoneToContinent[z] = "Kalimdor" end
+    for _, z in ipairs(cities) do zoneToContinent[z] = "Cities" end
+    for _, z in ipairs(turtleZones) do zoneToContinent[z] = "TurtleWoW" end
+
+    -- Gather unique quests
+    local allQuestsSeen = {}
+
+    if QuestTracker_ZoneData and QuestTracker_ZoneData.ZoneNameToID then
+        for zoneName, _ in pairs(QuestTracker_ZoneData.ZoneNameToID) do
+            local completed, total = self:GetZoneProgress(zoneName)
+            if total and total > 0 then
+                local continent = zoneToContinent[zoneName] or "Other"
+                if continentStats[continent] then
+                    continentStats[continent].total = continentStats[continent].total + total
+                    continentStats[continent].completed = continentStats[continent].completed + completed
+                    table.insert(continentStats[continent].zones, {
+                        name = zoneName,
+                        completed = completed,
+                        total = total,
+                        percent = math.floor((completed / total) * 100)
+                    })
+                end
+            end
+        end
+    end
+
+    -- Count unique quests and quest types
+    for zoneID, quests in pairs(self.zoneQuestCache) do
+        for questID, _ in pairs(quests) do
+            if not allQuestsSeen[questID] then
+                allQuestsSeen[questID] = true
+                totalQuests = totalQuests + 1
+
+                local done = pfQuest_history and pfQuest_history[questID]
+                if done then completedQuests = completedQuests + 1 end
+
+                local qType = GetQuestType(questID)
+                if qType == "kill" then
+                    killQuests = killQuests + 1
+                    if done then killCompleted = killCompleted + 1 end
+                elseif qType == "gather" then
+                    gatherQuests = gatherQuests + 1
+                    if done then gatherCompleted = gatherCompleted + 1 end
+                else
+                    otherQuests = otherQuests + 1
+                    if done then otherCompleted = otherCompleted + 1 end
+                end
+            end
+        end
+    end
+
+    -- Level bracket stats (only count if status filter matches)
+    local levelBrackets = {
+        {min = 1, max = 10, total = 0, completed = 0},
+        {min = 11, max = 20, total = 0, completed = 0},
+        {min = 21, max = 30, total = 0, completed = 0},
+        {min = 31, max = 40, total = 0, completed = 0},
+        {min = 41, max = 50, total = 0, completed = 0},
+        {min = 51, max = 60, total = 0, completed = 0},
+    }
+
+    for questID, _ in pairs(allQuestsSeen) do
+        local level = GetQuestLevel(questID)
+        local done = pfQuest_history and pfQuest_history[questID]
+        for _, bracket in ipairs(levelBrackets) do
+            if level >= bracket.min and level <= bracket.max then
+                bracket.total = bracket.total + 1
+                if done then bracket.completed = bracket.completed + 1 end
+                break
+            end
+        end
+    end
+
+    -- ========== RENDER STATISTICS - CARD LAYOUT ==========
+
+    local overallPercent = totalQuests > 0 and math.floor((completedQuests / totalQuests) * 100) or 0
+    local r, g, b = GetProgressColor(overallPercent)
+
+    -- Card 1: Overall Progress
+    CreateCard(0, yOffset, contentWidth, 50)
+    AddCardHeader("Overall Progress", cardPadding, yOffset + cardPadding)
+    yOffset = yOffset + 22
+
+    local barWidth = 40
+    local filled = math.floor(overallPercent / 100 * barWidth)
+    local empty = barWidth - filled
+    local progressBar = "|cff00ff00" .. string.rep("I", filled) .. "|r|cff555555" .. string.rep("I", empty) .. "|r"
+
+    AddLineAt(string.format("Total: |cffffffff%d|r   Completed: |cff%02x%02x%02x%d|r (%d%%)   Remaining: |cffffffff%d|r   %s",
+        totalQuests, r*255, g*255, b*255, completedQuests, overallPercent, totalQuests - completedQuests, progressBar),
+        cardPadding + 5, yOffset, 0.85, 0.85, 0.85, contentWidth - 20)
+    yOffset = yOffset + 36
+
+    -- Card 2: Three sub-cards for Types, Levels, Regions
+    local subCardWidth = 238
+    local subCardGap = 8
+
+    -- Quest type helper
+    local function TypeStr(name, total, done, color)
+        local pct = total > 0 and math.floor((done / total) * 100) or 0
+        return string.format("%s: |cff%s%d|r/%d (%d%%)", name, color, done, total, pct)
+    end
+
+    -- Level helper
+    local function LevelStr(bracket)
+        local pct = bracket.total > 0 and math.floor((bracket.completed / bracket.total) * 100) or 0
+        local lr, lg, lb = GetProgressColor(pct)
+        return string.format("%d-%d: |cff%02x%02x%02x%d|r/%d (%d%%)", bracket.min, bracket.max, lr*255, lg*255, lb*255, bracket.completed, bracket.total, pct)
+    end
+
+    -- Region helper
+    local function RegionStr(name, stats)
+        if not stats or stats.total == 0 then return nil end
+        local pct = math.floor((stats.completed / stats.total) * 100)
+        local cr, cg, cb = GetProgressColor(pct)
+        return string.format("%s: |cff%02x%02x%02x%d|r/%d (%d%%)", name, cr*255, cg*255, cb*255, stats.completed, stats.total, pct)
+    end
+
+    -- Build row data
+    local typeRows = {
+        TypeStr("Kill (K)", killQuests, killCompleted, "ff6666"),
+        TypeStr("Gather (G)", gatherQuests, gatherCompleted, "66ff66"),
+        TypeStr("Other (?)", otherQuests, otherCompleted, "aaaaaa"),
+    }
+
+    local levelRows = {}
+    for _, bracket in ipairs(levelBrackets) do
+        table.insert(levelRows, LevelStr(bracket))
+    end
+
+    local regionOrder = {"Eastern Kingdoms", "Kalimdor", "Cities", "TurtleWoW"}
+    local regionRows = {}
+    for _, name in ipairs(regionOrder) do
+        local str = RegionStr(name, continentStats[name])
+        if str then table.insert(regionRows, str) end
+    end
+
+    local maxRows = math.max(table.getn(typeRows), table.getn(levelRows), table.getn(regionRows))
+    local subCardHeight = 20 + (maxRows * 13) + 8
+
+    -- Sub-card 1: Quest Types
+    CreateCard(0, yOffset, subCardWidth, subCardHeight)
+    AddLineAt("|cffffcc00Quest Types|r", cardPadding, yOffset + cardPadding, 1, 0.82, 0, subCardWidth - 16)
+    local typeY = yOffset + 20
+    for i, row in ipairs(typeRows) do
+        AddLineAt(row, cardPadding + 5, typeY, 0.85, 0.85, 0.85, subCardWidth - 20)
+        typeY = typeY + 13
+    end
+
+    -- Sub-card 2: By Level
+    CreateCard(subCardWidth + subCardGap, yOffset, subCardWidth, subCardHeight)
+    AddLineAt("|cffffcc00By Level|r", subCardWidth + subCardGap + cardPadding, yOffset + cardPadding, 1, 0.82, 0, subCardWidth - 16)
+    local levelY = yOffset + 20
+    for i, row in ipairs(levelRows) do
+        AddLineAt(row, subCardWidth + subCardGap + cardPadding + 5, levelY, 0.85, 0.85, 0.85, subCardWidth - 20)
+        levelY = levelY + 13
+    end
+
+    -- Sub-card 3: By Region
+    CreateCard((subCardWidth + subCardGap) * 2, yOffset, subCardWidth, subCardHeight)
+    AddLineAt("|cffffcc00By Region|r", (subCardWidth + subCardGap) * 2 + cardPadding, yOffset + cardPadding, 1, 0.82, 0, subCardWidth - 16)
+    local regionY = yOffset + 20
+    for i, row in ipairs(regionRows) do
+        AddLineAt(row, (subCardWidth + subCardGap) * 2 + cardPadding + 5, regionY, 0.85, 0.85, 0.85, subCardWidth - 20)
+        regionY = regionY + 13
+    end
+
+    yOffset = yOffset + subCardHeight + 8
+
+    -- Card 3: Zones Needing Work
+    local allZoneStats = {}
+    for _, contStats in pairs(continentStats) do
+        for _, zone in ipairs(contStats.zones) do
+            if zone.total > 0 and zone.percent < 100 then
+                table.insert(allZoneStats, zone)
+            end
+        end
+    end
+    table.sort(allZoneStats, function(a, b) return a.percent < b.percent end)
+
+    local zonesPerCol = 8
+    local zoneCardHeight = 20 + (zonesPerCol * 13) + 8
+    CreateCard(0, yOffset, contentWidth, zoneCardHeight)
+    AddCardHeader("Zones Needing Work", cardPadding, yOffset + cardPadding)
+    local zoneStartY = yOffset + 22
+
+    for i = 1, zonesPerCol do
+        local zone1 = allZoneStats[i]
+        local zone2 = allZoneStats[i + zonesPerCol]
+
+        if zone1 then
+            local zr, zg, zb = GetProgressColor(zone1.percent)
+            AddLineAt(string.format("%s: |cff%02x%02x%02x%d/%d (%d%%)|r",
+                zone1.name, zr*255, zg*255, zb*255, zone1.completed, zone1.total, zone1.percent),
+                cardPadding + 5, zoneStartY, 0.8, 0.8, 0.8, 360)
+        end
+        if zone2 then
+            local zr, zg, zb = GetProgressColor(zone2.percent)
+            AddLineAt(string.format("%s: |cff%02x%02x%02x%d/%d (%d%%)|r",
+                zone2.name, zr*255, zg*255, zb*255, zone2.completed, zone2.total, zone2.percent),
+                390, zoneStartY, 0.8, 0.8, 0.8, 360)
+        end
+        if zone1 or zone2 then zoneStartY = zoneStartY + 13 end
+    end
+    yOffset = yOffset + zoneCardHeight + 8
+
+    -- Card 4: Zones Nearly Completed (75%+)
+    local nearlyComplete = {}
+    for _, contStats in pairs(continentStats) do
+        for _, zone in ipairs(contStats.zones) do
+            if zone.percent >= 75 then
+                table.insert(nearlyComplete, zone)
+            end
+        end
+    end
+    table.sort(nearlyComplete, function(a, b) return a.percent > b.percent end)
+
+    local nearlyRows = math.max(1, math.ceil(table.getn(nearlyComplete) / 2))
+    local nearlyCardHeight = 20 + (nearlyRows * 13) + 8
+    CreateCard(0, yOffset, contentWidth, nearlyCardHeight)
+    AddCardHeader("Zones Nearly Completed (75%+)", cardPadding, yOffset + cardPadding)
+    local nearlyStartY = yOffset + 22
+
+    if table.getn(nearlyComplete) > 0 then
+        local perCol = math.ceil(table.getn(nearlyComplete) / 2)
+        for i = 1, perCol do
+            local z1 = nearlyComplete[i]
+            local z2 = nearlyComplete[i + perCol]
+            if z1 then
+                local zr, zg, zb = GetProgressColor(z1.percent)
+                AddLineAt(string.format("%s: |cff%02x%02x%02x%d/%d (%d%%)|r",
+                    z1.name, zr*255, zg*255, zb*255, z1.completed, z1.total, z1.percent),
+                    cardPadding + 5, nearlyStartY, 0.8, 0.8, 0.8, 350)
+            end
+            if z2 then
+                local zr, zg, zb = GetProgressColor(z2.percent)
+                AddLineAt(string.format("%s: |cff%02x%02x%02x%d/%d (%d%%)|r",
+                    z2.name, zr*255, zg*255, zb*255, z2.completed, z2.total, z2.percent),
+                    380, nearlyStartY, 0.8, 0.8, 0.8, 350)
+            end
+            if z1 then nearlyStartY = nearlyStartY + 13 end
+        end
+    else
+        AddLineAt("|cff888888No zones at 75%+ yet|r", cardPadding + 5, nearlyStartY, 0.6, 0.6, 0.6, 300)
+    end
+    yOffset = yOffset + nearlyCardHeight
+
+    -- Set content height
+    trackerWindow.statsContent:SetHeight(math.max(yOffset + 20, 1))
+
+    -- Update scroll bar
+    local scrollBar = getglobal("QuestTrackerStatsScrollScrollBar")
+    if scrollBar then
+        local visibleHeight = trackerWindow.statsScroll:GetHeight()
+        local maxScroll = math.max(0, yOffset - visibleHeight + 30)
+        scrollBar:SetMinMaxValues(0, maxScroll)
+        scrollBar:SetValue(0)
+    end
+end
+
 -- Toggle tracker window
 function QuestTracker:ToggleWindow()
     local window = CreateTrackerWindow()
     if window:IsVisible() then
         window:Hide()
     else
-        self:PopulateZoneList()
+        self:UpdateViewTabs()
+        self:RefreshCurrentView()
         window:Show()
     end
 end

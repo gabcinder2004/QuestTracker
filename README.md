@@ -43,6 +43,15 @@ Right-click a quest to see:
 - Objective targets with coordinates and mob levels
 - Item drop sources with drop rates
 
+### Statistics View
+Click the "Statistics" tab in the Quest Tracker window to see:
+- Overall quest completion progress with visual progress bar
+- Quest type breakdown (Kill/Gather/Other) with completion stats
+- Progress by level range (1-10, 11-20, etc.)
+- Progress by region (Eastern Kingdoms, Kalimdor, Cities, TurtleWoW)
+- Top 10 zones needing work (lowest completion %)
+- List of fully completed zones
+
 ## Commands
 
 | Command | Description |
